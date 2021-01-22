@@ -1,20 +1,36 @@
 #include <Arduino.h>
 
-/* Pin definitions:
-Most of these pins can be moved to any digital or analog pin.
-DN(MOSI)and SCLK should be left where they are (SPI pins). The
-LED (backlight) pin should remain on a PWM-capable pin. */
+// This code creates inline functions that allow the use of a waveshare 128x128 OLED with 16 grey scale values.
+// We drive this from a UNO where we don't have enough memory to store the entire 128x128x4 bits. So we have to
+// simplify things a bit. First we drop the grey scales and only store 1 bit per pixel (full bright) and also
+// only render 128x64 but then when we upload to the waveshare we double each row. This works but is a bit ugly.
+// However it works with a UNO which otherwise would not be able to drive this kind of display.
+// Also the bit map that we generate internally has the colum bits organized into a byte, while the Waveshare
+// wants each column to be a separate byte with 2 nibbles per pixel horizontally. So we have to do a bit of
+// gymnastics to map them properly.
+//
+// This code is a modified version of LCD_Functions.h written by Jim Linbloom which in turn was adapted
+// from code written by Nathan Seidle. Any bugs are most likely introduced by me. 
+//
+// Peter Ashwood-Smith 2021 Lockdown version 1.0.
+//
+// Pin definitions:
+// Most of these pins can be moved to any digital or analog pin.
+// DN(MOSI)and SCLK should be left where they are (SPI pins). The
+
 const int scePin =  10;  // SCE - Chip select, pin 3 on OLED.
 const int rstPin =  8;   // RST - Reset, pin 4 on OLED.
 const int dcPin =    7;  // DC - Data/Command, pin 5 on OLED.
 const int sdinPin = 11;  // DN(MOSI) - Serial data, pin 6 on OLED.
 const int sclkPin = 13;  // SCLK - Serial clock, pin 7 on OLED.
 
-/* PCD8544-specific defines: */
-#define OLED_COMMAND  0
-#define OLED_DATA     1
+#define OLED_COMMAND  0  // A command follows
+#define OLED_DATA     1  // Data follows
 
-/* 84x48 OLED Defines: */
+// Note that you cannot use any old dimensions. For some reason
+// the Waveshare only wants powers of 2 otherwise it mucks up
+// when you write the rows. 
+
 #define OLED_WIDTH   128   // Note: x-coordinates go wide
 #define OLED_HEIGHT  64    // Note: y-coordinates go high
 #define WHITE        0     // For drawing pixels. A 0 draws white.
@@ -198,7 +214,7 @@ inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
     dy <<= 1;                             // dy is now 2*dy
     dx <<= 1;                             // dx is now 2*dx
     oledSetPixel(x0, y0, bw);             // Draw the first pixel.
-
+    //
     if (dx > dy) {
         int fraction = dy - (dx >> 1);
         while (x0 != x1) {
@@ -296,8 +312,8 @@ inline void oledUpdateDisplay()
              *dp = (colone<<4) | coltwo;
              OLEDWrite(OLED_DATA, *dp++);
          }
-         dp = &duplicate[0];
-         for(int x = 0; x < OLED_WIDTH-1; x+= 2) {
+         dp = &duplicate[0];                                          // Because we only have 128x64 bit map.
+         for(int x = 0; x < OLED_WIDTH-1; x+= 2) {                    // Stretch it to fit the 128x128.
              OLEDWrite(OLED_DATA, *dp++);
          }
      }

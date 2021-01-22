@@ -1,3 +1,36 @@
+
+// This is a very simple first attempt at using an arduino UNO to drive a Waveshare 128x128 OLED 
+// taking data from a BLO055 gyroscope. It draws a very simple artificial horizon and also the 
+// heading which is calibrated against the magnetic flux detector in the BL055 to try to track 
+// true north without having to be hand set.
+//
+// The horizon which is drawn as three lines, one the actual horizon and two perspective lines that 
+// join it from below. Then a little aircraft figure is drawn like an inverted gull wing --V--. 
+// The aircraft figure remains stationary in the display just as the wings would remain stationary to
+// a pilot, however the horizon is rotated with roll and pitched with pitch to mimic an actual 
+// external view. 
+// 
+// In addition a magnetic headig is display at the top from 0..360 and an attempt is made to slave
+// it to the magnetic flux detector so that it finds true north.
+//
+// This is experimental version 1.0 for educational purposes only and should not be used for actual
+// flight reference. A real artificial horizon requires many things that this does not have not least
+// of which is hardware which can work a wide variety of temperatures and vibration. 
+//
+// The BNO055 is wired as per the default Adafruit documenation.
+//
+// The OLED however is wired as per the OLED_functions.h include file. There are some tricks with 
+// the OLED because the UNO does not have neough memory to draw the image on the UNO before sending
+// it to the OLED. As a result we draw the image as 128x64 and then repeat each line when we draw it.
+// We also ignore the grey scale and only write 1 bit per pixel. THis allows us to 'just' squeeze this
+// program and its data on the UNO.
+//
+// THis software is provided as is, and is freely usable by anybody with no warranty or liability by
+// the author. BY all means copy this code but please maintain this disclaimer so that nobody uses this 
+// in a real aircraft and gets hurt.
+//
+// Peter Ashwood-Smith - 2021 - Lockdown version 1.0
+
 #include <SPI.h>
 #include <Arduino.h>
 #include <Wire.h>
@@ -106,9 +139,14 @@ inline void rotatePoint(float *x, float*y, float croll, float sroll, float pitch
        *y = y2 + pitch;             
 }
 
+//
+// This will draw a line subject to a rotation and shift. To save on trig funcion calls we take the
+// sin and cos of the angle to rotate as arguments however the pitch is just a simple addition. This is
+// not a true 3d rendering of the horizon as that would exceed the capabilities of the UNO to compute in
+// real time but it does a good job emulating what you'd see with a 2d rotation and shift.
+//
 inline void drawRotateShiftedLine(float x0, float y0, float x1, float y1, float croll, float sroll, float pitch)
 {
- 
        rotatePoint(&x0,&y0,croll,sroll,pitch);        
        rotatePoint(&x1,&y1,croll,sroll,pitch);
        drawLine(x0,y0,x1,y1);          
@@ -128,7 +166,7 @@ void loop()
      // If we are down, try to go up but draw an X.
      if (bnoState_g == false) {
          oledClearDisplay(BLACK);
-         drawLine(-1.0, -1.0, 1.0,  1.0);        // Draw an X on screen
+         drawLine(-1.0, -1.0, 1.0,  1.0);                // Draw an X on screen
          drawLine(-1.0,  1.0, 1.0, -1.0); 
          oledUpdateDisplay();
          delay(1000);
@@ -225,8 +263,8 @@ void loop()
              }
              //
              oledUpdateDisplay();
-         } else {
-             bnoState_g = false;
+         } else {                            // Want to modify so that sampling detects failure and draws X
+             bnoState_g = false;             // then tries to re-initialize. 
          }
      }
 }
