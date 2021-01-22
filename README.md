@@ -11,5 +11,10 @@ the 128x128x4 bit map in the waveshare by doubling the rows and mapping every si
 the Arduino UNO does not have sufficient memory to store the entire image. On a higher performance processor you could do all kinds of cool stuff
 like draw brown vs blue skye etc. 
 
+In addition to the horizon and small plane it also outputs a gyro computed heading. When the device first comes up it looks the maximum magnetic
+flux and uses that to be the north reference, it then adjusts what the gyro tell it is the current yaw and computes what that would be relative to
+where it thinks north is. During the period that it is trying to figure out north it puts and X over the heading. Likewise if the gyroscope is not
+reporting that it is calibrating or calibrated we draw a big X through the entire display. 
+
 There is a brief youtube description of this project here: https://youtu.be/mU1mT4dsyRU
 
