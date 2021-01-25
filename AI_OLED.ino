@@ -70,7 +70,7 @@ void setup()
 //
 // Sample the three access accelerometer and one access of the magnemometer for heading.
 //
-inline void sampleBNO(float *ox, float *oy, float *oz, float *ot)
+inline void sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
 {
      imu::Vector<3> imudata;
      //
@@ -79,8 +79,13 @@ inline void sampleBNO(float *ox, float *oy, float *oz, float *ot)
      *oy = imudata.y();
      *oz = imudata.z();
      //
+     // Where is North, its at strongest X magnetic flux.
      imudata = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
      *ot = imudata.x();
+     //
+     // Slip/Skid is accelleration 
+     imudata = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
+     *os = imudata.x();
 }
 
 //
@@ -89,7 +94,7 @@ inline void sampleBNO(float *ox, float *oy, float *oz, float *ot)
 // port we attempt to count transitions. If we get all zeros on every sample we 
 // assume the sensor is dead, this will trigger an attempt to reset it.
 //
-inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot)
+inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot, float *os)
 {        
      unsigned long t_end, t_now, t_start, t_dur, count;
      t_dur = ms * 1000;
@@ -97,17 +102,18 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot)
      t_end = t_start + t_dur; 
      t_now = t_start;
      count = 0;
-     *ox = *oy = *oz = *ot = 0;
+     *ox = *oy = *oz = *ot = *os = 0;
      float up = 0.0;
      while(1) {
           count += 1;
-          float ix,iy,iz,it; 
-          sampleBNO(&ix,&iy,&iz,&it);
+          float ix,iy,iz,it,is; 
+          sampleBNO(&ix,&iy,&iz,&it,&is);
           *ox += ix;
           *oy += iy;
           *oz += iz;
           *ot += it;
-          up += (ix + iy + iz +it);
+          *os += is;
+           up += (ix + iy + iz + it + is);
           t_now = micros();
           if ((t_start < t_end)  &&(t_now >= t_end))   break;
           if ((t_end   < t_start)&&(t_now >= t_start)) break;
@@ -116,6 +122,7 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot)
      *oy /= count;
      *oz /= count;
      *ot /= count;
+     *os /= count;
      return(up != 0.0);
 }
 
@@ -189,19 +196,20 @@ void loop()
              delay(1000);
          }
      } else {
-         float ox,  oy,  oz, ot;
+         float ox,  oy,  oz, ot, os;
          char buf[32];
-         int sampleMs = debug_g ? 500 : 10;          // longer samples in debug mode.
-         if (sample(sampleMs, &ox, &oy, &oz, &ot)) { // Sample orientations etc. for 100ms.
+         int sampleMs = debug_g ? 500 : 20;          // longer samples in debug mode.
+         if (sample(sampleMs,&ox,&oy,&oz,&ot,&os)) { // Sample orientations etc. for 100ms.
              oledClearDisplay(BLACK);                // Start with a clean white display
              //
-             drawLine(-50, -10, -15, -10);           // Draw the little plane. 
+             drawLine(-50, -10, -15,  -10);          // Draw the little plane. 
              drawLine(-15, -10,   0,   10);          // basically a --V--- symbol.
              drawLine( 0,   10,  15,  -10);      
-             drawLine( 15, -10,  50,  -10);    
+             drawLine( 15, -10,  50,  -10); 
              //
              int   yaw   = (int) (ox + 0.5);          // round up yaw in degrees.
              int   tsla  = (int) (ot + 0.5);
+             int   skid  = (int) (os * 5);            // 9.8m/s is about 1/2 deflection
              char  buf[10];                           // will print here as 090 etc.
              float roll  = (-oy * M_PI) / 180.0;      // convert roll to radians
              float pitch = ( oz * M_PI) / 180.0;      // convert pitch to radians.
@@ -272,6 +280,15 @@ void loop()
                  drawRotateShiftedLine( 60, -250,  25, 0, croll, sroll, ipitch);   // to horizo (but inverted view) 
               }
              //
+             // Draw the skid diamond and offset it based on yaw accelleration.
+             // Co-ordinated turn should have now yaw accelleration component.
+             //
+             //drawLine( skid + 0, 100, skid + -10, 90);  
+             //drawLine( skid + 0, 100, skid +  10, 90);
+             //drawLine( skid + 10, 90, skid + -10, 90);  
+             //
+             oledSetChar(OLED_TRIANGLE, skid + OLED_WIDTH/2 - 3, 56, WHITE);
+             //  
              oledUpdateDisplay();
          } else {                            // Want to modify so that sampling detects failure and draws X
              bnoState_g = false;             // then tries to re-initialize. 
