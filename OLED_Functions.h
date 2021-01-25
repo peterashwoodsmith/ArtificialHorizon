@@ -160,7 +160,8 @@ byte displayMap[OLED_WIDTH * OLED_HEIGHT / 8] = { 0x0 };
 //
 // There are two memory banks in the OLED, data/RAM and commands.
 // This function sets the DC pin high or low depending, and then
-// sends the data byte
+// sends the data byte. Note that for data transfer we use call 
+// the SPI.transfer directly inside a loop.
 //
 inline void OLEDWrite(byte data_or_command, byte data)
 {
@@ -195,9 +196,9 @@ inline void oledSetPixel(int x, int y, boolean bw)
 //
 inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
 {
-    int dy = y1 - y0; // Difference between y0 and y1
-    int dx = x1 - x0; // Difference between x0 and x1
-    int stepx, stepy;
+    register int dy = y1 - y0; // Difference between y0 and y1
+    register int dx = x1 - x0; // Difference between x0 and x1
+    register int stepx, stepy;
     //
     if (dy < 0) {
         dy = -dy;
@@ -216,7 +217,7 @@ inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
     oledSetPixel(x0, y0, bw);             // Draw the first pixel.
     //
     if (dx > dy) {
-        int fraction = dy - (dx >> 1);
+        register int fraction = dy - (dx >> 1);
         while (x0 != x1) {
             if (fraction >= 0) {
                 y0 += stepy;
@@ -227,7 +228,7 @@ inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
               oledSetPixel(x0, y0, bw);
         }
      } else {
-        int fraction = dx - (dy >> 1);
+        register int fraction = dx - (dy >> 1);
         while (y0 != y1) {
             if (fraction >= 0) {
                 x0 += stepx;
@@ -247,10 +248,10 @@ inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
 //
 inline void oledSetChar(char character, int x, int y, boolean bw)
 {    
-     byte column; // temp byte to store character's column bitmap
-     for(int i=0; i<5; i++)  {                                      // 5 columns (x) per character
+     register byte column; // temp byte to store character's column bitmap
+     for(register int i=0; i<5; i++)  {                                      // 5 columns (x) per character
          column = pgm_read_byte(&ASCII[character - 0x20][i]);
-         for(int j=0; j<8; j++) {                                   // 8 rows (y) per character
+         for(register int j=0; j<8; j++) {                                   // 8 rows (y) per character
              if (column & (0x01 << j)) // test bits to set pixels
                 oledSetPixel(x+i, y+j, bw);
             else
@@ -267,7 +268,7 @@ inline void oledSetStr(char * dString, int x, int y, boolean bw)
      while (*dString != 0x00)  {           // loop until null terminator
         oledSetChar(*dString++, x, y, bw);
         x +=5;
-        for(int i=y; i<y+8; i++) {
+        for(register int i=y; i<y+8; i++) {
             oledSetPixel(x, i, !bw);
         }
         x++;
@@ -284,7 +285,7 @@ inline void oledSetStr(char * dString, int x, int y, boolean bw)
 //
 inline void oledClearDisplay(boolean bw)
 {
-     for (int i=0; i<(OLED_WIDTH * OLED_HEIGHT / 8); i++) {  
+     for (register int i=0; i<(OLED_WIDTH * OLED_HEIGHT / 8); i++) {  
           displayMap[i] = bw ? 0xFF : 0;
      }
 }
@@ -298,25 +299,25 @@ inline void oledClearDisplay(boolean bw)
 //
 inline void oledUpdateDisplay()
 { 
+     digitalWrite(dcPin, OLED_DATA);                                  // Tell OLED we are sending data
+     digitalWrite(scePin, LOW);                                       // select the OLED device. 
      const  byte byteMap[2] = { 0xf, 0x0 };                           // white is 4 bit nibble 0xf, black is 0x0
-     for(int y=0; y < OLED_HEIGHT; y++) {
-         byte *mapp = &displayMap[(y/8)*OLED_WIDTH];
-         byte duplicate[OLED_WIDTH/2];
-         byte *dp = &duplicate[0];
-         for(int x = 0; x < OLED_WIDTH-1; x+=2) {                  
+     for(register int y=0; y < OLED_HEIGHT; y++) {
+         register byte *mapp = &displayMap[(y/8)*OLED_WIDTH];
+         register byte  row[OLED_WIDTH/2];
+         register byte *dp = &row[0];
+         for(register int x = 0; x < OLED_WIDTH-1; x+=2) {                  
              int  shift    = y % 8;
              byte pixone   = *mapp++;                       
              byte pixtwo   = *mapp++;                       
              byte colone   = byteMap[(pixone>>shift) & 1];
 	           byte coltwo   = byteMap[(pixtwo>>shift) & 1];
-             *dp = (colone<<4) | coltwo;
-             OLEDWrite(OLED_DATA, *dp++);
+             *dp++ = (colone<<4) | coltwo;
          }
-         dp = &duplicate[0];                                          // Because we only have 128x64 bit map.
-         for(int x = 0; x < OLED_WIDTH-1; x+= 2) {                    // Stretch it to fit the 128x128.
-             OLEDWrite(OLED_DATA, *dp++);
-         }
+         SPI.transfer(&row[0], OLED_WIDTH/2);                         // Yes we duplicate the row to make a 128x64 
+         SPI.transfer(&row[0], OLED_WIDTH/2);                         // fill a 128 x 128
      }
+     digitalWrite(scePin, HIGH);                                      // and we are done with the device release it.
 }
 
 //

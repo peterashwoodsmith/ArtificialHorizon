@@ -50,6 +50,11 @@ bool            bnoState_g = false;
 //
 const bool      debug_g = false;
 
+//
+// Rather than use floating point we use integers multiplied by 100
+//
+const int       precis_g = 100;
+
 // 
 // To get started all we need to do is attach out interrupt handler to the rising edge on PIN 2
 // adjust the display brighness and make sure interrupts are disabled before we start sampling.
@@ -117,13 +122,14 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot)
 //
 // Assuming the display is a normalized -1.0 --> 1.0 with 0,0 in the center
 // We draw a line. We must scale it and shift it to from the normalized coords.
+// We use a fixed point number / 1000.
 //
-inline void drawLine(float x0f, float y0f, float x1f, float y1f)
+inline void drawLine(int x0f, int y0f, int x1f, int y1f)
 {
-       int x0 = (x0f * OLED_WIDTH /2) + (OLED_WIDTH /2);
-       int x1 = (x1f * OLED_WIDTH /2) + (OLED_WIDTH /2);
-       int y0 = (y0f * OLED_HEIGHT/2) + (OLED_HEIGHT/2);
-       int y1 = (y1f * OLED_HEIGHT/2) + (OLED_HEIGHT/2);
+       int x0 = (x0f * OLED_WIDTH /2) /precis_g + (OLED_WIDTH /2);
+       int x1 = (x1f * OLED_WIDTH /2) /precis_g + (OLED_WIDTH /2);
+       int y0 = (y0f * OLED_HEIGHT)/2 /precis_g + OLED_HEIGHT /2;
+       int y1 = (y1f * OLED_HEIGHT)/2 /precis_g + OLED_HEIGHT /2;
        oledSetLine(x0,y0,x1,y1,WHITE);
 }
 
@@ -131,10 +137,10 @@ inline void drawLine(float x0f, float y0f, float x1f, float y1f)
 // Macro to rotate a point about a certain roll angle where the cos and sin of that angle
 // are precomputed arguments as is the pitch in units.
 //
-inline void rotatePoint(float *x, float*y, float croll, float sroll, float pitch)  
+inline void rotatePoint(int *x, int *y, int croll, int sroll, int pitch)  
 {    
-       float x2 = *x * croll - *y * sroll;       
-       float y2 = *x * sroll + *y * croll;       
+       int x2 = (*x * croll - *y * sroll) / precis_g;       
+       int y2 = (*x * sroll + *y * croll) / precis_g;       
        *x = x2; 
        *y = y2 + pitch;             
 }
@@ -145,12 +151,13 @@ inline void rotatePoint(float *x, float*y, float croll, float sroll, float pitch
 // not a true 3d rendering of the horizon as that would exceed the capabilities of the UNO to compute in
 // real time but it does a good job emulating what you'd see with a 2d rotation and shift.
 //
-inline void drawRotateShiftedLine(float x0, float y0, float x1, float y1, float croll, float sroll, float pitch)
+inline void drawRotateShiftedLine(int x0, int y0, int x1, int y1, int croll, int sroll, int pitch)
 {
        rotatePoint(&x0,&y0,croll,sroll,pitch);        
        rotatePoint(&x1,&y1,croll,sroll,pitch);
        drawLine(x0,y0,x1,y1);          
 }
+  
   
 //
 // The loop just performs 1/2 second of sampling after which is prints three G numbers. If for some reason
@@ -166,8 +173,8 @@ void loop()
      // If we are down, try to go up but draw an X.
      if (bnoState_g == false) {
          oledClearDisplay(BLACK);
-         drawLine(-1.0, -1.0, 1.0,  1.0);                // Draw an X on screen
-         drawLine(-1.0,  1.0, 1.0, -1.0); 
+         drawLine(-100, -100, 100,  100);            // Draw an X on screen
+         drawLine(-100,  100, 100, -100); 
          oledUpdateDisplay();
          delay(1000);
          if (debug_g) Serial.println("Re Init BNO");
@@ -184,22 +191,24 @@ void loop()
      } else {
          float ox,  oy,  oz, ot;
          char buf[32];
-         int sampleMs = debug_g ? 500 : 20;          // longer samples in debug mode.
+         int sampleMs = debug_g ? 500 : 10;          // longer samples in debug mode.
          if (sample(sampleMs, &ox, &oy, &oz, &ot)) { // Sample orientations etc. for 100ms.
              oledClearDisplay(BLACK);                // Start with a clean white display
              //
-             drawLine(-0.5,  -0.1, -0.15, -0.1);     // Draw the little plane. 
-             drawLine(-0.15, -0.1,  0.0,   0.1);     // basically a --V--- symbol.
-             drawLine( 0.0,   0.1,  0.15, -0.1);      
-             drawLine( 0.15, -0.1,  0.5,  -0.1);    
+             drawLine(-50, -10, -15, -10);           // Draw the little plane. 
+             drawLine(-15, -10,   0,   10);          // basically a --V--- symbol.
+             drawLine( 0,   10,  15,  -10);      
+             drawLine( 15, -10,  50,  -10);    
              //
              int   yaw   = (int) (ox + 0.5);          // round up yaw in degrees.
              int   tsla  = (int) (ot + 0.5);
              char  buf[10];                           // will print here as 090 etc.
              float roll  = (-oy * M_PI) / 180.0;      // convert roll to radians
              float pitch = ( oz * M_PI) / 180.0;      // convert pitch to radians.
+             float cosroll = cos(roll);
+             float sinroll = sin(roll); 
              bool  isUp  = (oz < 90) && (oz > -90);   // upright ?
-             bool  perSecEvt = ((millis()/1000)&1)==1;// Every second this is true
+             bool  perEvt = ((millis()/1000)%2)==0;   // Every second this is true
              bool  xOutHeading = false;               // will set if mag not good.
              char  flash = ' ';                       // normally spaces besides heading
              if (debug_g) {
@@ -219,14 +228,13 @@ void loop()
              else                                    // strength position seen so far.
                  yaw = 360 - (max_ot_deg - yaw);     // Will continuously try to optimize.
              //
-             if (perSecEvt) {                        // Test the sensor every second.
+             if (perEvt) {                        // Test the sensor every second.
                   uint8_t sys, gyro, accel, mag;
                   flash = '-';
                   bno.getCalibration(&sys,&gyro,&accel,&mag);
                   if (gyro == 0) {
-                      drawLine(-1.0, -1.0, 1.0,  1.0);// Draw an X on screen if gyro not ready
-                      drawLine(-1.0,  1.0, 1.0, -1.0); 
-                  }
+                      drawLine(-100, -100, 100,  100);// Draw an X on screen if gyro not ready
+                      drawLine(-100,  100, 100, -100);                  }
                   if (mag == 0)                       // Draw line through heading 
                       xOutHeading = true;
              }
@@ -234,8 +242,8 @@ void loop()
              sprintf(buf,"%c%03d%c", flash, yaw, flash );// Output yaw as 090 to top
              oledSetStr(buf, OLED_WIDTH/2-13, 1, WHITE);
              if (xOutHeading) {
-                 drawLine(-0.3, -1.0 , 0.3, -0.70);
-                 drawLine(-0.3, -0.70, 0.3,  -1.0);
+                 drawLine(-30, -100 , 30, -70);
+                 drawLine(-30, -70,   30, -100); 
              }
              //
              //  Draw the horizon and ground lines leading toward it rotated and shifted according to pitch and 
@@ -244,23 +252,25 @@ void loop()
              //
              if (isUp) {                      
                  // Upright ground image 
-                 float croll = cos(roll);                // precompute some trig.
-                 float sroll = sin(roll);            
-                 drawRotateShiftedLine(-2.5, 0.0, 2.5, 0.0, croll, sroll, pitch);   // Draw Horizon
-                 drawRotateShiftedLine(-0.60,2.5,-0.25,0.0, croll, sroll, pitch);   // Draw lines orthogonal(ish)
-                 drawRotateShiftedLine( 0.60,2.5, 0.25,0.0, croll, sroll, pitch);   // to horizon
-             } else {
+                 int croll = cosroll * precis_g;                                 // precompute some trig.
+                 int sroll = sinroll * precis_g;  
+                 int ipitch = pitch * precis_g;          
+                 drawRotateShiftedLine(-250, 0,   250, 0, croll, sroll, ipitch);   // Draw Horizon                
+                 drawRotateShiftedLine(-60,  250,-25,  0, croll, sroll, ipitch);   // Draw lines orthogonal(ish)
+                 drawRotateShiftedLine( 60,  250, 25,  0, croll, sroll, ipitch);   // to horizon                        
+              } else {
                  // Inverted ground image.
-                 float croll = cos(-roll);                // display rolls is backwards when inverted.
-                 float sroll = sin(-roll);
+                 int croll =   cosroll * precis_g;         // display rolls is backwards when inverted.
+                 int sroll = - sinroll * precis_g;
                  if (pitch > 0) 
                      pitch = -M_PI + pitch;
                  else
-                     pitch =  M_PI + pitch;               
-                 drawRotateShiftedLine(-2.5,  0.0, 2.5, 0.0, croll, sroll, pitch);  // Draw Horizon
-                 drawRotateShiftedLine(-0.60,-2.5,-0.25,0.0, croll, sroll, pitch);  // Draw lines orthogonal(ish)
-                 drawRotateShiftedLine( 0.60,-2.5, 0.25,0.0, croll, sroll, pitch);  // to horizo (but inverted view)
-             }
+                     pitch =  M_PI + pitch; 
+                 int ipitch = pitch * precis_g;      
+                 drawRotateShiftedLine(-250,   0, 250, 0, croll, sroll, ipitch);   // Draw Horizon
+                 drawRotateShiftedLine(-60, -250, -25, 0, croll, sroll, ipitch);   // Draw lines orthogonal(ish)
+                 drawRotateShiftedLine( 60, -250,  25, 0, croll, sroll, ipitch);   // to horizo (but inverted view) 
+              }
              //
              oledUpdateDisplay();
          } else {                            // Want to modify so that sampling detects failure and draws X
