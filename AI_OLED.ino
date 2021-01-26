@@ -105,7 +105,8 @@ void setup()
          Serial.begin(9600);
      oledBegin();
      bnoState_g = false;
-     watchdog_setup();
+     if (!debug_g) 
+         watchdog_setup();
 }
 
 //
@@ -144,7 +145,6 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
      t_now = t_start;
      count = 0;
      *ox = *oy = *oz = *ot = *os = 0;
-     float up = 0.0;
      while(1) {
           count += 1;
           float ix,iy,iz,it,is; 
@@ -154,7 +154,6 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
           *oz += iz;
           *ot += it;
           *os += is;
-           up += (ix + iy + iz + it + is);
           t_now = micros();
           if ((t_start < t_end)  &&(t_now >= t_end))   break;
           if ((t_end   < t_start)&&(t_now >= t_start)) break;
@@ -163,8 +162,10 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
      *oy /= count;
      *oz /= count;
      *ot /= count;
-     *os /= count;
-     return(up != 0.0);
+     *os /= count; 
+     // Return true only if the data seems sane. 
+     // When the I2C buss is down reads can return garbage.    
+     return(*ox + *oy + *oz + *ot + *os > 0.5);
 }
 
 //
@@ -245,7 +246,7 @@ void loop()
          float ox,  oy,  oz, ot, os;
          char buf[32];
          int sampleMs = debug_g ? 500 : 20;          // longer samples in debug mode.
-         if (sample(sampleMs,&ox,&oy,&oz,&ot,&os)) { // Sample orientations etc. for 100ms.
+         if (sample(sampleMs,&ox,&oy,&oz,&ot,&os)) { // Sample Gyro/Accel/Mag
              oledClearDisplay(BLACK);                // Start with a clean white display
              //
              drawLine(-50, -10, -15,  -10);          // Draw the little plane. 
