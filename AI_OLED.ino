@@ -47,10 +47,12 @@
 
 //
 // Trivial Gyroscope/Accellerometer/Magnetic compass chip. We keep a separate state flag
-// and will try to restart it if it does not respond while we are using it.
+// and will try to restart it if it does not respond while we are using it. Also wire an
+// External reset pin from pin 14 of Arduino to the RST on the BNO board.
 //
-Adafruit_BNO055 bno        = Adafruit_BNO055(55);
-bool            bnoState_g = false;                 
+Adafruit_BNO055            bno        = Adafruit_BNO055(55);
+int                        bnoRstPin  = 14;
+bool                       bnoState_g = false;  
 
 //
 // Debug flag, allows tracing, if we turn it off compiler should remove unused code.
@@ -76,6 +78,7 @@ void watchdog_isr()
      if (wdCounter_g > 3) {                    // more than 2 seconds
          for(int i=0; i < 1000; i++) {         // force OLED off
               OLEDWrite(OLED_COMMAND,0xae);    // many times to be safe.
+              digitalWrite(bnoRstPin, HIGH);   // signal the BNO to reset
          }                                     // Then either
          while(1) {                            // restart or hang.
             void (*f)(void)=0;
@@ -99,24 +102,46 @@ void watchdog_setup()
             
 }
 
+//
+// THis function is called periodically during the loop to make sure that the chip is 
+// responding properly. If for some reason the I2C dies or the chip stops talking we
+// will get back garbage, or it will hang and the watchdog will catch it, but either
+// way the entire CPU should restart. The first call will remember the info from the
+// bno after it comes up successfully and subsequent calls compare against this.
+//
+inline bool bnoVerifyRevInfo()               
+{                  
+     static bool havelast = false;
+     static Adafruit_BNO055::adafruit_bno055_rev_info_t last; 
+      if (havelast) {        
+          Adafruit_BNO055::adafruit_bno055_rev_info_t curr;
+          bno.getRevInfo(&curr);
+          return(memcmp(&curr, &last, sizeof(curr)) == 0);
+      } else {
+          bno.getRevInfo(&last);
+          havelast = true;
+          return(true);
+      }
+}
+
 // 
 // To get started all we need to do is attach out interrupt handler to the rising edge on PIN 2
 // adjust the display brighness and make sure interrupts are disabled before we start sampling.
 //
 void setup() 
 {   
-     if (debug_g == true) 
-         Serial.begin(9600);
-     oledBegin();
-     bnoState_g = false;
-     if (!debug_g) 
-         watchdog_setup();
+     if (debug_g == true) Serial.begin(9600);
+     oledBegin();                              // Bring up the OLED
+     bnoState_g = false;                       // BNO is currently down
+     digitalWrite(bnoRstPin, LOW);             // Allow BNO to come up.
+     if (!debug_g) watchdog_setup();           // And start monitoring loop()      
 }
 
 //
-// Sample the three access accelerometer and one access of the magnemometer for heading.
+// Sample the three access accelerometer and one access of the magnemometer for heading. If data seems correct 
+// return true, otherwise false which will trigger a reset and X on the display.
 //
-inline void sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
+inline bool sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
 {
      imu::Vector<3> imudata;
      //
@@ -132,6 +157,20 @@ inline void sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
      // Slip/Skid is accelleration 
      imudata = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
      *os = imudata.x();
+     //
+     // Bounds check that angles are within range and G values are within
+     // +/- 10G.
+     //
+#    define IF_NOT_IN_RANGE(v,a,b) if ((v < a)||(v > b))
+     //
+     IF_NOT_IN_RANGE(*ox          , -360,  +360) return(false);
+     IF_NOT_IN_RANGE(*oy          , -360,  +360) return(false);
+     IF_NOT_IN_RANGE(*oz          , -360,  +360) return(false);
+     IF_NOT_IN_RANGE(*os          , -100,  +100) return(false);
+     IF_NOT_IN_RANGE(imudata.y()  , -100,  +100) return(false);
+     IF_NOT_IN_RANGE(imudata.z()  , -100,  +100) return(false);
+     //
+     return(true);
 }
 
 //
@@ -152,7 +191,7 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
      while(1) {
           count += 1;
           float ix,iy,iz,it,is; 
-          sampleBNO(&ix,&iy,&iz,&it,&is);
+          if (!sampleBNO(&ix,&iy,&iz,&it,&is)) return(false);
           *ox += ix;
           *oy += iy;
           *oz += iz;
@@ -166,10 +205,8 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
      *oy /= count;
      *oz /= count;
      *ot /= count;
-     *os /= count; 
-     // Return true only if the data seems sane. 
-     // When the I2C buss is down reads can return garbage.    
-     return(*ox + *oy + *oz + *ot + *os > 0.5);
+     *os /= count;   
+     return(true);
 }
 
 //
@@ -237,6 +274,7 @@ void loop()
          if (debug_g) Serial.println("Re Init BNO");
          bnoState_g = bno.begin();
          if (bnoState_g == true) {
+             bnoState_g = bnoVerifyRevInfo();                     
              if (debug_g == true) {
                  sensor_t sensor;
                  bno.getSensor(&sensor);   
@@ -244,7 +282,7 @@ void loop()
              }
              bno.setExtCrystalUse(true);
              wdCounter_g = 0;
-             delay(1000);                            // Avoid a WD timeout on the delay
+             delay(1000);                           // Avoid a WD timeout on the delay
          }
      } else {
          float ox,  oy,  oz, ot, os;
@@ -296,6 +334,9 @@ void loop()
                       drawLine(-100,  100, 100, -100);                  }
                   if (mag == 0)                       // Draw line through heading 
                       xOutHeading = true;
+                  if (!bnoVerifyRevInfo()) {
+                      bnoState_g = false;
+                  }
              }
              //
              sprintf(buf,"%c%03d%c", flash, yaw, flash );// Output yaw as 090 to top
