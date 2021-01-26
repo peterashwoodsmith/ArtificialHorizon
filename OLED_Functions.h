@@ -155,9 +155,9 @@ static const byte ASCII[][5] PROGMEM = {
 // must be mapped so that each row is set of bytes where each byte
 // contains two nibbles one nibble per pixel grey scale. We don't 
 // support the grey scales on a per pixel basis because we don't
-// have enough memory.
+// have enough memory. The 8 extra is space for screw ups.
 // 
-byte displayMap[OLED_WIDTH * OLED_HEIGHT / 8] = { 0x0 };
+byte displayMap[(OLED_WIDTH * OLED_HEIGHT) / 8 + 10] = { 0x0 };
 
 //
 // There are two memory banks in the OLED, data/RAM and commands.
@@ -301,13 +301,11 @@ inline void oledClearDisplay(boolean bw)
 //
 inline void oledUpdateDisplay()
 { 
-     digitalWrite(dcPin, OLED_DATA);                                  // Tell OLED we are sending data
-     digitalWrite(scePin, LOW);                                       // select the OLED device. 
      const  byte byteMap[2] = { 0xf, 0x0 };                           // white is 4 bit nibble 0xf, black is 0x0
      for(register int y=0; y < OLED_HEIGHT; y++) {
          register byte *mapp = &displayMap[(y/8)*OLED_WIDTH];
-         register byte  row[OLED_WIDTH/2];
-         register byte *dp = &row[0];
+                  byte  row[OLED_WIDTH/2 + 2];
+         register byte *dp = &row[0];                                 // add 2 for safety
          for(register int x = 0; x < OLED_WIDTH-1; x+=2) {                  
              int  shift    = y % 8;
              byte pixone   = *mapp++;                       
@@ -316,10 +314,12 @@ inline void oledUpdateDisplay()
 	           byte coltwo   = byteMap[(pixtwo>>shift) & 1];
              *dp++ = (colone<<4) | coltwo;
          }
-         SPI.transfer(&row[0], OLED_WIDTH/2);                         // Yes we duplicate the row to make a 128x64 
-         SPI.transfer(&row[0], OLED_WIDTH/2);                         // fill a 128 x 128
+         digitalWrite(dcPin,   OLED_DATA);                             // Tell OLED we are sending data
+         digitalWrite(scePin,  LOW);                                   // select the OLED device. 
+         SPI.transfer(&row[0], OLED_WIDTH/2);                          // Yes we duplicate the row to make a 128x64 
+         SPI.transfer(&row[0], OLED_WIDTH/2);                          // fill a 128 x 128
+         digitalWrite(scePin,  HIGH);                                  // and we are done with the device release it.
      }
-     digitalWrite(scePin, HIGH);                                      // and we are done with the device release it.
 }
 
 //
