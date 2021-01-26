@@ -74,9 +74,13 @@ void watchdog_isr()
 {
      wdCounter_g += 1;
      if (wdCounter_g > 3) {                    // more than 2 seconds
-         while(1) {                            // Die to avoid false info
-              OLEDWrite(OLED_COMMAND,0xae);    //--turn off oled panel
-         }
+         for(int i=0; i < 1000; i++) {         // force OLED off
+              OLEDWrite(OLED_COMMAND,0xae);    // many times to be safe.
+         }                                     // Then either
+         while(1) {                            // restart or hang.
+            void (*f)(void)=0;
+            (*f)();
+         }   
      }
 }
 
