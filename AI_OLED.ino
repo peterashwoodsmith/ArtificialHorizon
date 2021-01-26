@@ -39,6 +39,13 @@
 #include "OLED_Functions.h"
 
 //
+// We use the TimerFunctions library to create a watch dog timer. I assume it hangs it off
+// the existing interrupt handlers for timer2.
+//
+#define USE_TIMER_2 1
+#include <TimerInterrupt.h>
+
+//
 // Trivial Gyroscope/Accellerometer/Magnetic compass chip. We keep a separate state flag
 // and will try to restart it if it does not respond while we are using it.
 //
@@ -55,6 +62,39 @@ const bool      debug_g = false;
 //
 const int       precis_g = 100;
 
+//
+// Watchdog timer - it ticks over making sure the loop() function is operating.
+// If for some reason the loop() blocks then we will disable the display. This
+// prevents the display from showing inaccurate IMU data which could be 
+// catastrophic if its being relied on. 
+//
+volatile byte wdCounter_g;
+
+void watchdog_isr()
+{
+     wdCounter_g += 1;
+     if (wdCounter_g > 3) {                    // more than 2 seconds
+         while(1) {                            // Die to avoid false info
+              OLEDWrite(OLED_COMMAND,0xae);    //--turn off oled panel
+         }
+     }
+}
+
+//
+// This will set the internal timer to invoke the ISR above periodically. This allows
+// us to detect a block in the loop() likely caused by the wire or spi library to a 
+// device which has failed. In this case we can take action to warn the user, i.e.
+// kill the display.
+//
+void watchdog_setup()
+{    
+     wdCounter_g = 0;
+     ITimer2.init();
+     if (! ITimer2.attachInterruptInterval(500, watchdog_isr))
+          while(1);
+            
+}
+
 // 
 // To get started all we need to do is attach out interrupt handler to the rising edge on PIN 2
 // adjust the display brighness and make sure interrupts are disabled before we start sampling.
@@ -65,6 +105,7 @@ void setup()
          Serial.begin(9600);
      oledBegin();
      bnoState_g = false;
+     watchdog_setup();
 }
 
 //
@@ -171,7 +212,10 @@ inline void drawRotateShiftedLine(int x0, int y0, int x1, int y1, int croll, int
 // the device is not active it keeps trying to start it.
 //
 void loop()     
-{    //
+{    // Reset the watchdog counter. Its a volatile byte incremented in the watchdog ISR.
+     wdCounter_g = 0;
+     //
+     //
      // We keep track of where the minimum and maximum magnetic field has been seen relative to the
      // actual gyro yaw value. We then use this to make a correction for magnetic heading in the display.
      // This means it will only be accurate if it sees strong ut North while relatively level.
@@ -182,6 +226,7 @@ void loop()
          oledClearDisplay(BLACK);
          drawLine(-100, -100, 100,  100);            // Draw an X on screen
          drawLine(-100,  100, 100, -100); 
+         wdCounter_g = 0;                            // Avoid a WD timout on the delay
          oledUpdateDisplay();
          delay(1000);
          if (debug_g) Serial.println("Re Init BNO");
@@ -193,7 +238,8 @@ void loop()
                  Serial.print  ("Sensor:"); Serial.println(sensor.name);
              }
              bno.setExtCrystalUse(true);
-             delay(1000);
+             wdCounter_g = 0;
+             delay(1000);                            // Avoid a WD timeout on the delay
          }
      } else {
          float ox,  oy,  oz, ot, os;
