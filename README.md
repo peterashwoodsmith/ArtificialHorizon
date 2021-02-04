@@ -18,3 +18,5 @@ reporting that it is calibrating or calibrated we draw a big X through the entir
 
 There is a brief youtube description of this project here: https://youtu.be/mU1mT4dsyRU
 
+There is also a youtube description of the watchdog funtion here: https://youtu.be/h2vJ4zZMkqA
+
