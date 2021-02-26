@@ -13,7 +13,7 @@
 // In addition a magnetic headig is display at the top from 0..360 and an attempt is made to slave
 // it to the magnetic flux detector so that it finds true north.
 //
-// This is experimental version 1.0 for educational purposes only and should not be used for actual
+// This is experimental version 2.0 for educational purposes only and should not be used for actual
 // flight reference. A real artificial horizon requires many things that this does not have not least
 // of which is hardware which can work a wide variety of temperatures and vibration. 
 //
@@ -21,29 +21,24 @@
 //
 // The OLED however is wired as per the OLED_functions.h include file. There are some tricks with 
 // the OLED because the UNO does not have neough memory to draw the image on the UNO before sending
-// it to the OLED. As a result we draw the image as 128x64 and then repeat each line when we draw it.
-// We also ignore the grey scale and only write 1 bit per pixel. THis allows us to 'just' squeeze this
-// program and its data on the UNO.
+// it to the OLED. As a result we draw the image as 128x128 but ignore the greyscale values.
 //
 // THis software is provided as is, and is freely usable by anybody with no warranty or liability by
 // the author. BY all means copy this code but please maintain this disclaimer so that nobody uses this 
 // in a real aircraft and gets hurt.
 //
-// Peter Ashwood-Smith - 2021 - Lockdown version 1.0
+// Peter Ashwood-Smith - 2021 - Lockdown version 2.0
 
 #include <SPI.h>
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include "OLED_Functions.h"
 
 //
-// We use the TimerFunctions library to create a watch dog timer. I assume it hangs it off
-// the existing interrupt handlers for timer2.
+// Code to control the 128x128 bit waveshare greyscale OLED.
 //
-#define USE_TIMER_2 1
-#include <TimerInterrupt.h>
+#include "OLED_Functions.h"
 
 //
 // Trivial Gyroscope/Accellerometer/Magnetic compass chip. We keep a separate state flag
@@ -51,18 +46,29 @@
 // External reset pin from pin 14 of Arduino to the RST on the BNO board.
 //
 Adafruit_BNO055            bno        = Adafruit_BNO055(55);
-int                        bnoRstPin  = 14;
+int                        bnoRstPin  = 12;
 bool                       bnoState_g = false;  
 
 //
 // Debug flag, allows tracing, if we turn it off compiler should remove unused code.
 //
-const bool      debug_g = false;
+const bool      debug_g    = false;
+const bool      debugXYZ_g = false;   // show gyro raw x,y,z on screen
+const bool      debugMag_g = true;
 
 //
 // Rather than use floating point we use integers multiplied by 100
 //
 const int       precis_g = 100;
+
+#if     USE_WD
+//
+// If we have the TimerInterrupts available we set USE_WD to create the WD behavior.
+// We use the TimerFunctions library to create a watch dog timer. I assume it hangs it off
+// the existing interrupt handlers for timer2.
+//
+#define USE_TIMER_2 1
+#include <TimerInterrupt.h>
 
 //
 // Watchdog timer - it ticks over making sure the loop() function is operating.
@@ -70,6 +76,7 @@ const int       precis_g = 100;
 // prevents the display from showing inaccurate IMU data which could be 
 // catastrophic if its being relied on. 
 //
+
 volatile byte wdCounter_g;
 
 void watchdog_isr()
@@ -93,14 +100,29 @@ void watchdog_isr()
 // device which has failed. In this case we can take action to warn the user, i.e.
 // kill the display.
 //
-void watchdog_setup()
+inline void watchdog_setup()
 {    
      wdCounter_g = 0;
      ITimer2.init();
      if (! ITimer2.attachInterruptInterval(500, watchdog_isr))
-          while(1);
-            
+          while(1);        
 }
+
+//
+// Reset the watchdog counger, this is called in the main loop(s) to indicate that
+// work is being done and to avoid being reset by the watchdog timeout.
+//
+inline void watchdog_reset()
+{    
+      wdCounter_g = 0;
+}
+
+#else
+
+inline void watchdog_setup() { }    // No watchdog
+inline void watchdog_reset() { }    // No watchdog
+
+#endif
 
 //
 // THis function is called periodically during the loop to make sure that the chip is 
@@ -134,14 +156,14 @@ void setup()
      oledBegin();                              // Bring up the OLED
      bnoState_g = false;                       // BNO is currently down
      digitalWrite(bnoRstPin, LOW);             // Allow BNO to come up.
-     if (!debug_g) watchdog_setup();           // And start monitoring loop()      
+     if (!debug_g) watchdog_setup();           // And start monitoring loop()   
 }
 
 //
 // Sample the three access accelerometer and one access of the magnemometer for heading. If data seems correct 
 // return true, otherwise false which will trigger a reset and X on the display.
 //
-inline bool sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
+inline bool sampleBNO(float *ox, float *oy, float *oz, float *os)
 {
      imu::Vector<3> imudata;
      //
@@ -149,10 +171,6 @@ inline bool sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
      *ox = imudata.x();
      *oy = imudata.y();
      *oz = imudata.z();
-     //
-     // Where is North, its at strongest X magnetic flux.
-     imudata = bno.getVector(Adafruit_BNO055::VECTOR_MAGNETOMETER);
-     *ot = imudata.x();
      //
      // Slip/Skid is accelleration 
      imudata = bno.getVector(Adafruit_BNO055::VECTOR_ACCELEROMETER);
@@ -179,7 +197,7 @@ inline bool sampleBNO(float *ox, float *oy, float *oz, float *ot, float *os)
 // port we attempt to count transitions. If we get all zeros on every sample we 
 // assume the sensor is dead, this will trigger an attempt to reset it.
 //
-inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot, float *os)
+inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *os)
 {        
      unsigned long t_end, t_now, t_start, t_dur, count;
      t_dur = ms * 1000;
@@ -187,24 +205,22 @@ inline bool sample(unsigned long ms, float *ox, float *oy, float *oz, float *ot,
      t_end = t_start + t_dur; 
      t_now = t_start;
      count = 0;
-     *ox = *oy = *oz = *ot = *os = 0;
+     *ox = *oy = *oz = *os = 0;
      while(1) {
           count += 1;
           float ix,iy,iz,it,is; 
-          if (!sampleBNO(&ix,&iy,&iz,&it,&is)) return(false);
+          if (!sampleBNO(&ix,&iy,&iz,&is)) return(false);
           *ox += ix;
           *oy += iy;
           *oz += iz;
-          *ot += it;
           *os += is;
-          t_now = micros();
-          if ((t_start < t_end)  &&(t_now >= t_end))   break;
-          if ((t_end   < t_start)&&(t_now >= t_start)) break;
+           t_now = micros();
+           if ((t_start < t_end)  &&(t_now >= t_end))   break;
+           if ((t_end   < t_start)&&(t_now >= t_start)) break;
      }
      *ox /= count;
      *oy /= count;
      *oz /= count;
-     *ot /= count;
      *os /= count;   
      return(true);
 }
@@ -225,14 +241,13 @@ inline void drawLine(int x0f, int y0f, int x1f, int y1f)
 
 //
 // Macro to rotate a point about a certain roll angle where the cos and sin of that angle
-// are precomputed arguments as is the pitch in units.
+// are precomputed arguments. After rotation it appies and x,y shift to the point.
 //
-inline void rotatePoint(int *x, int *y, int croll, int sroll, int pitch)  
-{    
-       int x2 = (*x * croll - *y * sroll) / precis_g;       
+inline void rotateShiftPoint(int *x, int *y, int croll, int sroll, int xshift, int yshift)  
+{      int x2 = (*x * croll - *y * sroll) / precis_g;       
        int y2 = (*x * sroll + *y * croll) / precis_g;       
-       *x = x2; 
-       *y = y2 + pitch;             
+       *x = x2 + xshift;
+       *y = y2 + yshift;            
 }
 
 //
@@ -241,34 +256,28 @@ inline void rotatePoint(int *x, int *y, int croll, int sroll, int pitch)
 // not a true 3d rendering of the horizon as that would exceed the capabilities of the UNO to compute in
 // real time but it does a good job emulating what you'd see with a 2d rotation and shift.
 //
-inline void drawRotateShiftedLine(int x0, int y0, int x1, int y1, int croll, int sroll, int pitch)
+inline void drawRotateShiftedLine(int x0, int y0, int x1, int y1, int croll, int sroll, int xshift, int yshift)
 {
-       rotatePoint(&x0,&y0,croll,sroll,pitch);        
-       rotatePoint(&x1,&y1,croll,sroll,pitch);
+       rotateShiftPoint(&x0,&y0,croll,sroll,xshift,yshift);        
+       rotateShiftPoint(&x1,&y1,croll,sroll,xshift,yshift);
        drawLine(x0,y0,x1,y1);          
 }
-  
-  
+
 //
 // The loop just performs 1/2 second of sampling after which is prints three G numbers. If for some reason
 // the device is not active it keeps trying to start it.
 //
 void loop()     
-{    // Reset the watchdog counter. Its a volatile byte incremented in the watchdog ISR.
-     wdCounter_g = 0;
+{    
+     // Reset the watchdog counter. Its a volatile byte incremented in the watchdog ISR.
+     watchdog_reset();
      //
-     //
-     // We keep track of where the minimum and maximum magnetic field has been seen relative to the
-     // actual gyro yaw value. We then use this to make a correction for magnetic heading in the display.
-     // This means it will only be accurate if it sees strong ut North while relatively level.
-     //
-     static float max_ot = -1000; static int max_ot_deg = 180;
-     // If we are down, try to go up but draw an X.
+     // If we are down, try to go up but draw an X and initailize the display
      if (bnoState_g == false) {
          oledClearDisplay(BLACK);
-         drawLine(-100, -100, 100,  100);            // Draw an X on screen
+         drawLine(-100, -100, 100,  100);           // Draw an X on screen
          drawLine(-100,  100, 100, -100); 
-         wdCounter_g = 0;                            // Avoid a WD timout on the delay
+         watchdog_reset();                          // Avoid a WD timout on the delay
          oledUpdateDisplay();
          delay(1000);
          if (debug_g) Serial.println("Re Init BNO");
@@ -281,14 +290,14 @@ void loop()
                  Serial.print  ("Sensor:"); Serial.println(sensor.name);
              }
              bno.setExtCrystalUse(true);
-             wdCounter_g = 0;
-             delay(1000);                           // Avoid a WD timeout on the delay
+             watchdog_reset();
+             delay(1000);                            // Avoid a WD timeout on the delay
          }
      } else {
-         float ox,  oy,  oz, ot, os;
+         float ox,  oy, oz, os;
          char buf[32];
-         int sampleMs = debug_g ? 500 : 20;          // longer samples in debug mode.
-         if (sample(sampleMs,&ox,&oy,&oz,&ot,&os)) { // Sample Gyro/Accel/Mag
+         int sampleMs =  20;                         // longer samples in debug mode.
+         if (sample(sampleMs,&ox,&oy,&oz,&os)) {     // Sample Gyro/Accel
              oledClearDisplay(BLACK);                // Start with a clean white display
              //
              drawLine(-50, -10, -15,  -10);          // Draw the little plane. 
@@ -296,54 +305,47 @@ void loop()
              drawLine( 0,   10,  15,  -10);      
              drawLine( 15, -10,  50,  -10); 
              //
-             int   yaw   = (int) (ox + 0.5);          // round up yaw in degrees.
-             int   tsla  = (int) (ot + 0.5);
+             int   yawdeg= (int) (ox + 0.5);          // round up yaw in degrees
              int   skid  = (int) (os * 5);            // 9.8m/s is about 1/2 deflection
-             char  buf[10];                           // will print here as 090 etc.
+             char  buf[15];                           // will print here as 090 etc.
              float roll  = (-oy * M_PI) / 180.0;      // convert roll to radians
              float pitch = ( oz * M_PI) / 180.0;      // convert pitch to radians.
+             float yaw   = ( ox * M_PI) / 180.0;      // convert yaw to radians
              float cosroll = cos(roll);
              float sinroll = sin(roll); 
-             bool  isUp  = (oz < 90) && (oz > -90);   // upright ?
-             bool  perEvt = ((millis()/1000)%2)==0;   // Every second this is true
-             bool  xOutHeading = false;               // will set if mag not good.
-             char  flash = ' ';                       // normally spaces besides heading
+             bool  isUp    = (oz < 90) && (oz > -90); // upright ?
+             int   seconds = (millis()/1000);         // Every 2 seconds this is true
+      static int   pseconds = 0;                      // previous seconds (static)
+      static bool  xOutHeading = false;               // X out heading if compas bad
+      static bool  xOutDisplay = false;               // X out display if gyro bad
+      static char  flash = ' ';                       // alternates '-' ' '
+             //
              if (debug_g) {
                  Serial.println("------"); Serial.println(oy); Serial.println(oz);
              }
+             yawdeg = (yawdeg + 180) % 360;                // correct for chip placement.
              //
-             // If we are relatively level look at the magnetic field strength for min
-             // max values and at what heading we saw them. Then correct the yaw value
-             // so that 360 corresponds to strongest magnetic field strength.
-             //
-             if ((oy < 5) && (oy > -5) && (oz < 5) && (oz > -5) && (ot > max_ot)) {
-                  max_ot = ot; 
-                  max_ot_deg = ox; 
-             }
-             if (yaw > max_ot_deg)                   // Try to correct the yaw angle
-                 yaw -= max_ot_deg;                  // so that North is the max mag
-             else                                    // strength position seen so far.
-                 yaw = 360 - (max_ot_deg - yaw);     // Will continuously try to optimize.
-             //
-             if (perEvt) {                        // Test the sensor every second.
-                  uint8_t sys, gyro, accel, mag;
-                  flash = '-';
-                  bno.getCalibration(&sys,&gyro,&accel,&mag);
-                  if (gyro == 0) {
-                      drawLine(-100, -100, 100,  100);// Draw an X on screen if gyro not ready
-                      drawLine(-100,  100, 100, -100);                  }
-                  if (mag == 0)                       // Draw line through heading 
-                      xOutHeading = true;
+             if (seconds - pseconds >= 1) {                // Test the sensor every 2 seconds.
+                  pseconds = seconds;                      // Remember last time we checked
+                  uint8_t sys, gyro, accel, magn;
+                  flash = flash == ' ' ? '-' : ' ';
+                  bno.getCalibration(&sys,&gyro,&accel,&magn);
+                  xOutHeading = (magn != 3);
+                  xOutDisplay = (gyro != 3);
                   if (!bnoVerifyRevInfo()) {
                       bnoState_g = false;
                   }
              }
              //
-             sprintf(buf,"%c%03d%c", flash, yaw, flash );// Output yaw as 090 to top
-             oledSetStr(buf, OLED_WIDTH/2-13, 1, WHITE);
+             sprintf(buf,"%c%c %03d %c%c", flash, flash, yawdeg, flash, flash );// Output yaw as 090 to top
+             oledSetStr(buf, OLED_WIDTH/2-23, 4, WHITE);
              if (xOutHeading) {
-                 drawLine(-30, -100 , 30, -70);
+                 drawLine(-30, -100 , 30, -70);       // X out the heading if the compass not ready
                  drawLine(-30, -70,   30, -100); 
+             }
+             if (xOutDisplay) {
+                 drawLine(-100, -100, 100,  100);     // Draw an X on screen if gyro not ready
+                 drawLine(-100,  100, 100, -100); 
              }
              //
              //  Draw the horizon and ground lines leading toward it rotated and shifted according to pitch and 
@@ -352,12 +354,15 @@ void loop()
              //
              if (isUp) {                      
                  // Upright ground image 
-                 int croll = cosroll * precis_g;                                 // precompute some trig.
+                 int croll = cosroll * precis_g;                                          // precompute some trig.
                  int sroll = sinroll * precis_g;  
-                 int ipitch = pitch * precis_g;          
-                 drawRotateShiftedLine(-250, 0,   250, 0, croll, sroll, ipitch);   // Draw Horizon                
-                 drawRotateShiftedLine(-60,  250,-25,  0, croll, sroll, ipitch);   // Draw lines orthogonal(ish)
-                 drawRotateShiftedLine( 60,  250, 25,  0, croll, sroll, ipitch);   // to horizon                        
+                 //
+                 int ypitch =   (pitch * croll)/(M_PI/4.0);
+                 int xpitch =  -(pitch * sroll)/(M_PI/2.0);
+                 //        
+                 drawRotateShiftedLine(-250, 0,   250, 0, croll, sroll, xpitch, ypitch);  // Draw Horizon                
+                 drawRotateShiftedLine(-60,  250,-25,  0, croll, sroll, xpitch, ypitch);  // Draw lines orthogonal(ish)
+                 drawRotateShiftedLine( 60,  250, 25,  0, croll, sroll, xpitch, ypitch);  // to horizon                        
               } else {
                  // Inverted ground image.
                  int croll =   cosroll * precis_g;         // display rolls is backwards when inverted.
@@ -366,20 +371,20 @@ void loop()
                      pitch = -M_PI + pitch;
                  else
                      pitch =  M_PI + pitch; 
-                 int ipitch = pitch * precis_g;      
-                 drawRotateShiftedLine(-250,   0, 250, 0, croll, sroll, ipitch);   // Draw Horizon
-                 drawRotateShiftedLine(-60, -250, -25, 0, croll, sroll, ipitch);   // Draw lines orthogonal(ish)
-                 drawRotateShiftedLine( 60, -250,  25, 0, croll, sroll, ipitch);   // to horizo (but inverted view) 
+                 //
+                 int ypitch =  (pitch * croll)/(M_PI/4.0);
+                 int xpitch = -(pitch * sroll)/(M_PI/2.0);
+                 //                                        
+                 drawRotateShiftedLine(-250,   0, 250, 0, croll, sroll, xpitch, ypitch);   // Draw Horizon
+                 drawRotateShiftedLine(-60, -250, -25, 0, croll, sroll, xpitch, ypitch);   // Draw lines orthogonal(ish)
+                 drawRotateShiftedLine( 60, -250,  25, 0, croll, sroll, xpitch, ypitch);   // to horizo (but inverted view) 
               }
              //
-             // Draw the skid diamond and offset it based on yaw accelleration.
-             // Co-ordinated turn should have now yaw accelleration component.
+             // Draw the skid diamond character (which we've overlaoded in the bit map for the ~ character)  
              //
-             //drawLine( skid + 0, 100, skid + -10, 90);  
-             //drawLine( skid + 0, 100, skid +  10, 90);
-             //drawLine( skid + 10, 90, skid + -10, 90);  
-             //
-             oledSetChar(OLED_TRIANGLE, skid + OLED_WIDTH/2 - 3, 56, WHITE);
+             oledSetChar('(', OLED_WIDTH/2 - 8, OLED_HEIGHT - 20 , WHITE);
+             oledSetChar(')', OLED_WIDTH/2 + 4, OLED_HEIGHT - 20 , WHITE);
+             oledSetChar(OLED_TRIANGLE, skid + OLED_WIDTH/2 - 3, OLED_HEIGHT - 20 , WHITE); 
              //  
              oledUpdateDisplay();
          } else {                            // Want to modify so that sampling detects failure and draws X

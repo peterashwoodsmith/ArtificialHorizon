@@ -32,7 +32,7 @@ const int sclkPin = 13;  // SCLK - Serial clock, pin 7 on OLED.
 // when you write the rows. 
 
 #define OLED_WIDTH   128   // Note: x-coordinates go wide
-#define OLED_HEIGHT  64    // Note: y-coordinates go high
+#define OLED_HEIGHT  128   // Note: y-coordinates go high
 #define WHITE        0     // For drawing pixels. A 0 draws white.
 #define BLACK        1     // A 1 draws black.
 
@@ -171,7 +171,7 @@ inline void OLEDWrite(byte data_or_command, byte data)
      digitalWrite(dcPin, data_or_command);
      //Send the data
      digitalWrite(scePin, LOW);
-     SPI.transfer(data); 
+     SPI.transfer(&data,1); 
      digitalWrite(scePin, HIGH);
 }
 
@@ -246,7 +246,10 @@ inline void oledSetLine(int x0, int y0, int x1, int y1, boolean bw)
 //
 // This function will draw a char (defined in the ASCII table
 // near the beginning of this sketch) at a defined x and y).
-// The color can be either black (1) or white (0).
+// The color can be either black (1) or white (0). Note that we
+// Play a little trick to double the character height by just
+// repeating each row twice. Saves memory over having a double
+// height font.
 //
 inline void oledSetChar(char character, int x, int y, boolean bw)
 {    
@@ -254,10 +257,13 @@ inline void oledSetChar(char character, int x, int y, boolean bw)
      for(register int i=0; i<5; i++)  {                                      // 5 columns (x) per character
          column = pgm_read_byte(&ASCII[character - 0x20][i]);
          for(register int j=0; j<8; j++) {                                   // 8 rows (y) per character
-             if (column & (0x01 << j)) // test bits to set pixels
-                oledSetPixel(x+i, y+j, bw);
-            else
-                oledSetPixel(x+i, y+j, !bw);
+             if (column & (0x01 << j)) {                                     // test bits to set pixels
+                oledSetPixel(x+i, y+2*j,   bw);
+                oledSetPixel(x+i, y+2*j+1, bw);
+             } else {
+                oledSetPixel(x+i, y+2*j,  !bw);
+                oledSetPixel(x+i, y+2*j+1,!bw);
+             }
          }
      }
 }
@@ -287,7 +293,7 @@ inline void oledSetStr(char * dString, int x, int y, boolean bw)
 //
 inline void oledClearDisplay(boolean bw)
 {
-     for (register int i=0; i<(OLED_WIDTH * OLED_HEIGHT / 8); i++) {  
+     for (register int i=0; i< ((OLED_WIDTH * OLED_HEIGHT) / 8); i++) {  
           displayMap[i] = bw ? 0xFF : 0;
      }
 }
@@ -316,8 +322,7 @@ inline void oledUpdateDisplay()
          }
          digitalWrite(dcPin,   OLED_DATA);                             // Tell OLED we are sending data
          digitalWrite(scePin,  LOW);                                   // select the OLED device. 
-         SPI.transfer(&row[0], OLED_WIDTH/2);                          // Yes we duplicate the row to make a 128x64 
-         SPI.transfer(&row[0], OLED_WIDTH/2);                          // fill a 128 x 128
+         SPI.transfer(&row[0], OLED_WIDTH/2);                          // Yes we duplicate the row to make a 128x64     
          digitalWrite(scePin,  HIGH);                                  // and we are done with the device release it.
      }
 }
@@ -393,18 +398,17 @@ inline void oledReset()
 //
 inline void oledBegin(void)
 {
-  //Configure control pins
+  // Configure control pins
   pinMode(scePin, OUTPUT);
   pinMode(rstPin, OUTPUT);
   pinMode(dcPin, OUTPUT);
   pinMode(sdinPin, OUTPUT);
   pinMode(sclkPin, OUTPUT);
-
+  // SPI setup
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   SPI.begin();
-
   oledReset();
   oledClearDisplay(BLACK);
   oledUpdateDisplay();
